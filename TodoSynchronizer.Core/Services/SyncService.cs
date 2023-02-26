@@ -10,6 +10,7 @@ using System.Text.RegularExpressions;
 using TodoSynchronizer.Core.Config;
 using TodoSynchronizer.Core.Extensions;
 using TodoSynchronizer.Core.Helpers;
+using TodoSynchronizer.Core.Models;
 using TodoSynchronizer.Core.Models.CanvasModels;
 
 namespace TodoSynchronizer.Core.Services
@@ -51,7 +52,7 @@ namespace TodoSynchronizer.Core.Services
             Message = "读取 Canvas 课程列表";
             try
             {
-                courses = CanvasService.ListCourses();
+                courses = CanvasService.ListCourses().Shuffle();
                 if (courses == null)
                     throw new Exception("Canvas 课程列表为空");
             }
@@ -198,7 +199,7 @@ namespace TodoSynchronizer.Core.Services
                 {
                     foreach (var course in courses)
                     {
-                        CourseCount++;
+                            CourseCount++;
                         if (SyncConfig.Default.AssignmentConfig.Enabled)
                             ProcessAssignments(GetCourseMessage(course), course, dicCategory["assignment"]);
                         if (SyncConfig.Default.AnouncementConfig.Enabled)
@@ -294,6 +295,9 @@ namespace TodoSynchronizer.Core.Services
                         var links = TodoService.ListCheckItems(taskList.Id.ToString(), todoTask.Id.ToString());
                         
                         var submission = CanvasService.GetAssignmentSubmisson(course.Id.ToString(), assignment.Id.ToString());
+
+                        if (submission == null)
+                           throw new Exception("获取 submission 失败");
 
                         ChecklistItem checkitem1 = null;
                         if (links.Count >= 1)
@@ -950,22 +954,5 @@ namespace TodoSynchronizer.Core.Services
             return bytes;
         }
         #endregion
-    }
-
-    public class SyncState
-    {
-        public SyncState(SyncStateEnum state, string message)
-        {
-            State = state;
-            Message = message;
-        }
-
-        public SyncStateEnum State { get; set; }
-        public string Message { get; set; }
-    }
-
-    public enum SyncStateEnum
-    {
-        Finished, Error, Progress
     }
 }

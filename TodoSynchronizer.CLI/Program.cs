@@ -5,18 +5,22 @@ using TodoSynchronizer.Core.Config;
 using YamlDotNet.Serialization;
 using TodoSynchronizer.Core.Yaml;
 using File = System.IO.File;
+using TodoSynchronizer.Core.Models;
 
 namespace TodoSynchronizer.CLI;
 class Program
 {
     static bool error;
+    static ISimpleLogger logger;
     static void Main(string[] args)
     {
-        Console.WriteLine("TodoSynchronizer v0.1 beta");
+        string canvastoken = "", graphtokenpath = "", didacredentialfile = "";
+        string configpath = "", graphtokenkey = "", offlinetokenfile = "";
+        bool local = false;
+        OfflineTokenDto offlineToken = null;
+        DidaCredential didaCredential = null;
 
-        string canvastoken = "", graphtokenpath = "";
-        string configpath = "", graphtokenkey = "";
-        for(int i = 0; i < args.Length; i++)
+        for (int i = 0; i < args.Length; i++)
         {
             if (args[i] == "-canvastoken")
                 if (i + 1 < args.Length)
@@ -30,41 +34,152 @@ class Program
             if (args[i] == "-graphtokenkey")
                 if (i + 1 < args.Length)
                     graphtokenkey = args[i + 1].Trim();
+            if (args[i] == "-didacredentialfile")
+                if (i + 1 < args.Length)
+                    didacredentialfile = args[i + 1].Trim();
+            if (args[i] == "-local")
+                local = true;
         }
 
-        if (canvastoken == "")
+        if (!local)
         {
-            Console.WriteLine("未指定 Canvas Token！");
+            logger = new ConsoleAdapter();
+            Log("TodoSynchronizer v0.1 beta");
+            Log(DateTime.Now.ToString("G"));
+
+            if (canvastoken == "")
+            {
+                Log("未指定 Canvas Token！");
+                Environment.Exit(-1);
+            }
+            if (didacredentialfile == "")
+            {
+                if (graphtokenpath == "")
+                {
+                    Log("未指定 Graph Token 文件！");
+                    Environment.Exit(-1);
+                }
+                if (graphtokenkey == "")
+                {
+                    Log("未指定 Graph Token 秘钥！");
+                    Environment.Exit(-1);
+                }
+            }
+            else
+            {
+                didaCredential = JsonConvert.DeserializeObject<DidaCredential>(File.ReadAllText(didacredentialfile));
+            }
+        }
+        else
+        {
+            var logfilepath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, $"{DateTime.Now.ToString("yyyyMMdd")}.log");
+            logger = new LogFileAdapter(logfilepath);
+            //logger = new ConsoleAdapter();
+            Log("TodoSynchronizer v0.1 beta");
+            Log(DateTime.Now.ToString("G"));
+
+            configpath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, $"config.yaml");
+
+            offlinetokenfile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, $"token.json");
+            offlineToken = JsonConvert.DeserializeObject<OfflineTokenDto>(File.ReadAllText(offlinetokenfile));
+            canvastoken = offlineToken.CanvasToken;
+            didaCredential = offlineToken.DidaCredential;
+        }
+
+        ReadConfig(configpath);
+
+        CanvasLogin(canvastoken);
+
+        if (didacredentialfile == "")
+        {
+            GraphLogin(graphtokenpath, graphtokenkey, offlinetokenfile, offlineToken);
+
+            SyncService sync = new SyncService();
+            sync.OnReportProgress += OnReportProgress;
+            sync.Go();
+        }
+        else
+        {
+            DidaLogin(didaCredential);
+
+            DidaSyncService sync = new DidaSyncService();
+            sync.OnReportProgress += OnReportProgress;
+            sync.Go();
+        }
+    }
+
+    private static void DidaLogin(DidaCredential didaCredential)
+    {
+        try
+        {
+            var res = DidaService.Login(JsonConvert.SerializeObject(didaCredential));
+            if (!res.success)
+            {
+                Log("滴答清单 认证失败！");
+                Log(res.result);
+                Environment.Exit(-1);
+            }
+            Log("滴答清单 认证成功！");
+        }
+        catch (Exception ex)
+        {
+            Log("滴答清单 认证失败！");
+            Log(ex.ToString());
             Environment.Exit(-1);
         }
-        if (graphtokenpath == "")
-        {
-            Console.WriteLine("未指定 Graph Token 文件！");
-            Environment.Exit(-1);
-        }
+    }
+
+    private static void ReadConfig(string configpath)
+    {
         if (configpath == "")
         {
-            Console.WriteLine("未指定配置文件！");
+            Log("未指定配置文件！");
             Environment.Exit(-1);
         }
-        if (graphtokenkey == "")
+        try
         {
-            Console.WriteLine("未指定 Graph Token 秘钥！");
+            var yml = File.ReadAllText(configpath);
+            var deserializer = new DeserializerBuilder()
+                .WithNamingConvention(YamlDotNet.Serialization.NamingConventions.CamelCaseNamingConvention.Instance)
+                .WithTypeInspector(n => new IgnoreCaseTypeInspector(n))
+                .IgnoreUnmatchedProperties()
+                .Build();
+            SyncConfig.Default = deserializer.Deserialize<SyncConfig>(yml);
+        }
+        catch (Exception ex)
+        {
+            Log($"读取配置失败：{ex.Message}");
             Environment.Exit(-1);
         }
+        Log("读取配置成功");
+    }
+
+    private static void CanvasLogin(string canvastoken)
+    {
         var res1 = CanvasService.Login(canvastoken);
         if (!res1.success)
         {
-            Console.WriteLine("Canvas 认证失败！");
-            Console.WriteLine(res1.result);
+            Log("Canvas 认证失败！");
+            Log(res1.result);
             Environment.Exit(-1);
         }
-        Console.WriteLine($"Canvas 认证成功");
+        Log($"Canvas 认证成功");
+    }
 
+    private static void GraphLogin(string graphtokenpath, string graphtokenkey, string offlinetokenfile, OfflineTokenDto offlineToken)
+    {
         try
         {
-            var graphtokenenc = File.ReadAllText(graphtokenpath);
-            var graphtoken = AesHelper.Decrypt(graphtokenkey, graphtokenenc);
+            string graphtokenenc = "", graphtoken = "";
+            if (offlineToken != null)
+            {
+                graphtoken = offlineToken.GraphToken;
+            }
+            else
+            {
+                graphtokenenc = File.ReadAllText(graphtokenpath);
+                graphtoken = AesHelper.Decrypt(graphtokenkey, graphtokenenc);
+            }
 
             //var headers = new Dictionary<string, string>();
             //headers.Add("Content-Type", "application/x-www-form-urlencoded");
@@ -83,50 +198,48 @@ class Program
 
             if (!refreshres.IsSuccessStatusCode)
             {
-                Console.WriteLine("获取 Graph Token 失败！");
-                Console.WriteLine(refreshres.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+                Log("获取 Graph Token 失败！");
+                Log(refreshres.Content.ReadAsStringAsync().GetAwaiter().GetResult());
                 Environment.Exit(-1);
             }
             RefreshModel refreshModel = JsonConvert.DeserializeObject<RefreshModel>(refreshres.Content.ReadAsStringAsync().GetAwaiter().GetResult());
             TodoService.Token = refreshModel.AccessToken;
 
-            graphtokenenc = AesHelper.Encrypt(graphtokenkey, refreshModel.RefreshToken);
-            File.WriteAllText(graphtokenpath, graphtokenenc);
+            try
+            {
+                if (offlineToken != null)
+                {
+                    offlineToken.GraphToken = refreshModel.RefreshToken;
+                    var offlineTokenDto = JsonConvert.SerializeObject(offlineToken);
+                    File.WriteAllText(offlinetokenfile, offlineTokenDto);
+                }
+                else
+                {
+                    graphtokenenc = AesHelper.Encrypt(graphtokenkey, refreshModel.RefreshToken);
+                    File.WriteAllText(graphtokenpath, graphtokenenc);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("更新 Graph Token失败！请检查是否有文件的写入权限！");
+                Log(ex.ToString());
+                Environment.Exit(-1);
+            }
+            
             var userinfo = TodoService.GetUserInfo();
         }
         catch (Exception ex)
         {
-            Console.WriteLine("Graph 认证失败！");
-            Console.WriteLine(ex.ToString());
+            Log("Graph 认证失败！");
+            Log(ex.ToString());
             Environment.Exit(-1);
         }
-        Console.WriteLine("Graph 认证成功");
-
-        try
-        {
-            var yml = File.ReadAllText(configpath);
-            var deserializer = new DeserializerBuilder()
-                .WithNamingConvention(YamlDotNet.Serialization.NamingConventions.CamelCaseNamingConvention.Instance)
-                .WithTypeInspector(n => new IgnoreCaseTypeInspector(n))
-                .IgnoreUnmatchedProperties()
-                .Build();
-            SyncConfig.Default = deserializer.Deserialize<SyncConfig>(yml);
-        }
-        catch(Exception ex)
-        {
-            Console.WriteLine($"读取配置失败：{ex.Message}");
-            Environment.Exit(-1);
-        }
-        Console.WriteLine("读取配置成功");
-
-        SyncService sync = new SyncService();
-        sync.OnReportProgress += OnReportProgress;
-        sync.Go();
+        Log("Graph 认证成功");
     }
 
     private static void OnReportProgress(SyncState state)
     {
-        Console.WriteLine(state.Message);
+        Log(state.Message);
         if (state.State == SyncStateEnum.Finished)
         {
             Environment.Exit(error ? -1 : 0);
@@ -138,21 +251,8 @@ class Program
         }
     }
 
-    public partial class RefreshModel
+    private static void Log(string message)
     {
-        [JsonProperty("access_token")]
-        public string AccessToken { get; set; }
-
-        [JsonProperty("expires_in")]
-        public long ExpiresIn { get; set; }
-
-        [JsonProperty("refresh_token")]
-        public string RefreshToken { get; set; }
-
-        [JsonProperty("scope")]
-        public string Scope { get; set; }
-
-        [JsonProperty("token_type")]
-        public string TokenType { get; set; }
+        logger.Log(message);
     }
 }

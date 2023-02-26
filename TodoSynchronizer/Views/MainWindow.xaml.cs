@@ -13,6 +13,7 @@ using System.Threading;
 using System.Windows;
 using TodoSynchronizer.Core.Config;
 using TodoSynchronizer.Core.Helpers;
+using TodoSynchronizer.Core.Models;
 using TodoSynchronizer.Core.Models.CanvasModels;
 using TodoSynchronizer.Core.Services;
 using TodoSynchronizer.Core.Yaml;
@@ -59,6 +60,14 @@ namespace TodoSynchronizer.Views
         {
             Items = new ObservableCollection<string>();
             SyncService sync = new SyncService();
+            sync.OnReportProgress += OnReportProgress;
+            sync.Go();
+        }
+
+        private void GoDida()
+        {
+            Items = new ObservableCollection<string>();
+            DidaSyncService sync = new DidaSyncService();
             sync.OnReportProgress += OnReportProgress;
             sync.Go();
         }
@@ -120,5 +129,14 @@ namespace TodoSynchronizer.Views
             m.Show();
         }
 
+        private void ButtonDida_Click(object sender, RoutedEventArgs e)
+        {
+            DidaService.Login(File.ReadAllText(@"C:\Users\111\Downloads\dida.txt"));
+            ReadConfig();
+            ButtonProgressAssist.SetIsIndicatorVisible(GoButton, true);
+            ButtonProgressAssist.SetIsIndeterminate(GoButton, true);
+            Thread t = new Thread(() => { GoDida(); });
+            t.Start();
+        }
     }
 }
